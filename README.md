@@ -274,6 +274,32 @@ qs.count()        # COUNT(*) query (or len(cache) if already evaluated)
 qs.delete()       # bulk DELETE matching the filters, returns row count
 ```
 
+### Distinct
+
+```python
+User.all().distinct()                # SELECT DISTINCT ...
+User.filter(age__gte=18).distinct().count()  # count distinct matching rows
+```
+
+`distinct()` is chainable and returns a new QuerySet. Note that `SELECT DISTINCT *` with a unique primary key has no effect since every row is already unique — this matches standard SQL behavior.
+
+### Aggregates
+
+`sum()`, `avg()`, `min()`, and `max()` are terminal methods that return a scalar:
+
+```python
+User.all().sum("age")               # total of all ages
+User.filter(active=True).avg("age") # average age of active users
+User.all().min("name")              # alphabetically first name
+User.all().max("created")           # most recent datetime
+```
+
+Aggregates respect filters but ignore `order_by()` and `limit()` (which are irrelevant to aggregate results). Returns `None` when no rows match.
+
+The column name is validated — passing a nonexistent column raises `ValueError` with a helpful message listing valid columns.
+
+Results are deserialized through the same type conversion as regular queries, so `min("created")` on a datetime column returns a `datetime` object, not a string.
+
 ### Filtering Across Relations
 
 Single-hop related field lookups work via JOINs:

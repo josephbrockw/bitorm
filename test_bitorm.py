@@ -2152,3 +2152,192 @@ class TestSaveValidation:
         u.age = "not a number"
         with pytest.raises(TypeError, match="age"):
             u.save()
+
+
+# =========================================================================== #
+# 22. Distinct
+# =========================================================================== #
+
+class TestDistinct:
+
+    def test_distinct_returns_queryset(self):
+        _create_simple_tables()
+        qs = SimpleUser.all().distinct()
+        assert isinstance(qs, QuerySet)
+
+    def test_distinct_does_not_mutate_original(self):
+        _create_simple_tables()
+        qs1 = SimpleUser.all()
+        qs2 = qs1.distinct()
+        assert qs1._distinct is False
+        assert qs2._distinct is True
+
+    def test_distinct_default_is_false(self):
+        qs = QuerySet(SimpleUser)
+        assert qs._distinct is False
+
+    def test_distinct_propagated_by_clone(self):
+        _create_simple_tables()
+        qs1 = SimpleUser.all().distinct()
+        qs2 = qs1.filter(age=30)
+        assert qs2._distinct is True
+
+    def test_distinct_sql_contains_keyword(self):
+        _create_simple_tables()
+        qs = SimpleUser.all().distinct()
+        sql, _ = qs._sql()
+        assert "SELECT DISTINCT" in sql
+
+    def test_non_distinct_sql_no_keyword(self):
+        _create_simple_tables()
+        qs = SimpleUser.all()
+        sql, _ = qs._sql()
+        assert "DISTINCT" not in sql
+
+    def test_distinct_with_filter(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        results = list(SimpleUser.filter(age__gte=30).distinct())
+        assert len(results) == 1
+        assert results[0].name == "Ada"
+
+    def test_distinct_with_count(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        assert SimpleUser.all().distinct().count() == 2
+
+    def test_distinct_with_first(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        result = SimpleUser.all().distinct().first()
+        assert result is not None
+        assert result.name == "Ada"
+
+    def test_distinct_with_unique_pk_returns_all_rows(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="a@test.com", age=30).save()
+        SimpleUser(name="Bob", email="b@test.com", age=30).save()
+        results = list(SimpleUser.all().distinct())
+        assert len(results) == 2
+
+
+# =========================================================================== #
+# 23. Aggregates
+# =========================================================================== #
+
+class TestAggregates:
+
+    def _seed_users(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="a@test.com", age=10).save()
+        SimpleUser(name="Bob", email="b@test.com", age=20).save()
+        SimpleUser(name="Eve", email="e@test.com", age=30).save()
+
+    # -- sum ------------------------------------------------------------------
+
+    def test_sum_basic(self):
+        self._seed_users()
+        assert SimpleUser.all().sum("age") == 60
+
+    def test_sum_with_filter(self):
+        self._seed_users()
+        assert SimpleUser.filter(age__gte=20).sum("age") == 50
+
+    def test_sum_empty_table(self):
+        _create_simple_tables()
+        assert SimpleUser.all().sum("age") is None
+
+    # -- avg ------------------------------------------------------------------
+
+    def test_avg_basic(self):
+        self._seed_users()
+        assert SimpleUser.all().avg("age") == 20.0
+
+    def test_avg_empty_table(self):
+        _create_simple_tables()
+        assert SimpleUser.all().avg("age") is None
+
+    # -- min ------------------------------------------------------------------
+
+    def test_min_basic(self):
+        self._seed_users()
+        assert SimpleUser.all().min("age") == 10
+
+    def test_min_empty_table(self):
+        _create_simple_tables()
+        assert SimpleUser.all().min("age") is None
+
+    # -- max ------------------------------------------------------------------
+
+    def test_max_basic(self):
+        self._seed_users()
+        assert SimpleUser.all().max("age") == 30
+
+    def test_max_empty_table(self):
+        _create_simple_tables()
+        assert SimpleUser.all().max("age") is None
+
+    # -- edge cases -----------------------------------------------------------
+
+    def test_aggregate_ignores_order_and_limit(self):
+        self._seed_users()
+        result = SimpleUser.all().order_by("name").limit(1).sum("age")
+        assert result == 60
+
+    def test_aggregate_invalid_column_raises(self):
+        _create_simple_tables()
+        with pytest.raises(ValueError, match="nonexistent") as exc_info:
+            SimpleUser.all().sum("nonexistent")
+        assert "Valid columns" in str(exc_info.value)
+
+    def test_aggregate_with_join_filter(self):
+        _create_fk_tables()
+        author = FKAuthor(name="Ada", email="ada@test.com")
+        author.save()
+        other = FKAuthor(name="Bob", email="bob@test.com")
+        other.save()
+        FKPost(title="P1", body="B1", author=author).save()
+        FKPost(title="P2", body="B2", author=author).save()
+        FKPost(title="P3", body="B3", author=other).save()
+        count = FKPost.filter(author__name="Ada").count()
+        assert count == 2
+
+    def test_aggregate_with_distinct(self):
+        self._seed_users()
+        result = SimpleUser.all().distinct().sum("age")
+        assert result == 60
+
+    def test_sum_skips_nulls(self):
+        NullableModel.create_table()
+        NullableModel(value="a").save()
+        NullableModel(value=None).save()
+        NullableModel(value="b").save()
+        assert NullableModel.all().count() == 3
+        assert NullableModel.all().min("value") == "a"
+
+    def test_aggregate_on_string_column(self):
+        self._seed_users()
+        assert SimpleUser.all().min("name") == "Ada"
+        assert SimpleUser.all().max("name") == "Eve"
+
+    def test_aggregate_does_not_populate_cache(self):
+        self._seed_users()
+        qs = SimpleUser.all()
+        qs.sum("age")
+        assert qs._result_cache is None
+
+    def test_aggregate_datetime_deserialization(self):
+        _create_timestamp_tables()
+        dt1 = datetime(2024, 1, 1, 12, 0, 0)
+        dt2 = datetime(2024, 6, 15, 12, 0, 0)
+        TimestampModel(created=dt1, day=date.today(), data=b"").save()
+        TimestampModel(created=dt2, day=date.today(), data=b"").save()
+        result = TimestampModel.all().min("created")
+        assert isinstance(result, datetime)
+        assert result == dt1
+
+    def test_aggregate_respects_filters_no_match(self):
+        self._seed_users()
+        assert SimpleUser.filter(age__gt=100).sum("age") is None

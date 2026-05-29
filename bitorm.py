@@ -456,6 +456,7 @@ class QuerySet:
         self._filters: dict = {}
         self._order: list[str] = []
         self._limit: Optional[int] = None
+        self._distinct: bool = False
         self._result_cache: Optional[list] = None  # populated on first evaluation
 
     def _clone(self) -> "QuerySet":
@@ -464,6 +465,7 @@ class QuerySet:
         qs._filters = dict(self._filters)
         qs._order = list(self._order)
         qs._limit = self._limit
+        qs._distinct = self._distinct
         return qs  # cache deliberately NOT copied -> the clone re-queries
 
     # -- chainable builders (return a new QuerySet, never mutate self) ------
@@ -486,6 +488,11 @@ class QuerySet:
     def all(self) -> "QuerySet":
         """Return a fresh QuerySet (lazy). Matches Django: no query runs here."""
         return self._clone()
+
+    def distinct(self) -> "QuerySet":
+        qs = self._clone()
+        qs._distinct = True
+        return qs
 
     # -- SQL assembly -------------------------------------------------------
     def _sql(self) -> tuple[str, list]:
@@ -518,7 +525,8 @@ class QuerySet:
             )
 
         # Always qualify + select base.* so joined columns never leak into rows.
-        sql = f"SELECT {base}.* FROM {base}{join_sql}"
+        distinct = "DISTINCT " if self._distinct else ""
+        sql = f"SELECT {distinct}{base}.* FROM {base}{join_sql}"
         if where_sql:
             sql += f" WHERE {where_sql}"
         if order_parts:
@@ -547,6 +555,36 @@ class QuerySet:
         sql, params = self._sql()
         count_sql = f"SELECT COUNT(*) AS n FROM ({sql})"
         return _db().execute(count_sql, tuple(params)).fetchone()["n"]
+
+    def _aggregate(self, func: str, column: str) -> Any:
+        valid = {c.name for c in self.model._columns}
+        if column not in valid:
+            raise ValueError(
+                f"'{column}' is not a column on {self.model.__name__}. "
+                f"Valid columns: {', '.join(sorted(valid))}"
+            )
+        qs = self._clone()
+        qs._order = []
+        qs._limit = None
+        sql, params = qs._sql()
+        col_obj = next(c for c in self.model._columns if c.name == column)
+        agg_sql = f"SELECT {func}({column}) AS val FROM ({sql})"
+        result = _db().execute(agg_sql, tuple(params)).fetchone()["val"]
+        if result is not None:
+            return col_obj.from_db(result)
+        return None
+
+    def sum(self, column: str) -> Any:
+        return self._aggregate("SUM", column)
+
+    def avg(self, column: str) -> Any:
+        return self._aggregate("AVG", column)
+
+    def min(self, column: str) -> Any:
+        return self._aggregate("MIN", column)
+
+    def max(self, column: str) -> Any:
+        return self._aggregate("MAX", column)
 
     def delete(self) -> int:
         """Bulk delete every row matching the current filters."""
