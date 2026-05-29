@@ -166,6 +166,40 @@ class _Column:
             return bool(value)
         return value
 
+    # --- validation ----------------------------------------------------------
+    def _validate(self, value: Any) -> None:
+        if value is None:
+            if not self.field.nullable and not self.field.primary_key:
+                raise ValueError(
+                    f"Field '{self.name}' cannot be None (not nullable)."
+                )
+            return
+
+        if self.py_type not in self.PY_TO_SQL:
+            return
+
+        if self.py_type is float:
+            if not isinstance(value, (int, float)):
+                raise TypeError(
+                    f"Field '{self.name}' expects float, got {type(value).__name__}."
+                )
+        elif self.py_type is bool:
+            if not isinstance(value, (bool, int)):
+                raise TypeError(
+                    f"Field '{self.name}' expects bool, got {type(value).__name__}."
+                )
+        elif self.py_type is date:
+            if isinstance(value, datetime) or not isinstance(value, date):
+                raise TypeError(
+                    f"Field '{self.name}' expects date, got {type(value).__name__}."
+                )
+        else:
+            if not isinstance(value, self.py_type):
+                raise TypeError(
+                    f"Field '{self.name}' expects {self.py_type.__name__}, "
+                    f"got {type(value).__name__}."
+                )
+
 
 # --------------------------------------------------------------------------- #
 # Foreign keys (one-to-many / many-to-one)
@@ -726,6 +760,9 @@ class Model:
         pk = self._pk
         pk_value = getattr(self, pk, None)
         data_cols = [c for c in self._columns if c.name != pk]
+
+        for col in self._columns:
+            col._validate(getattr(self, col.name))
 
         if pk_value is None:  # INSERT
             names = [c.name for c in data_cols]

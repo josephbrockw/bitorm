@@ -533,7 +533,7 @@ class TestSave:
     def test_save_insert_not_null_violation(self):
         NotNullModel.create_table()
         obj = NotNullModel()
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(ValueError, match="cannot be None"):
             obj.save()
 
     def test_save_none_on_nullable_column(self):
@@ -1153,7 +1153,7 @@ class TestForeignKey:
     def test_fk_nullable_false(self):
         _create_fk_nonnull_tables()
         post = FKNonNullPost(title="Hello")
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(ValueError, match="cannot be None"):
             post.save()
 
     def test_fk_on_delete_cascade(self):
@@ -1624,7 +1624,7 @@ class TestNullHandling:
     def test_non_nullable_column_rejects_none(self):
         NotNullModel.create_table()
         obj = NotNullModel(value=None)
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(ValueError, match="cannot be None"):
             obj.save()
 
     def test_filter_eq_none(self):
@@ -2020,3 +2020,135 @@ class TestBugFixCoverage:
         fetched = Child.get(id=obj.id)
         assert fetched.name == "hello"
         assert fetched.extra == "world"
+
+
+# =========================================================================== #
+# 21. Save Validation
+# =========================================================================== #
+
+class TestSaveValidation:
+    """Tests for type + not-null validation on Model.save()."""
+
+    # -- not-null checks ------------------------------------------------------
+
+    def test_save_rejects_none_on_not_null_field(self):
+        NotNullModel.create_table()
+        obj = NotNullModel(value=None)
+        with pytest.raises(ValueError, match="cannot be None"):
+            obj.save()
+
+    def test_save_allows_none_on_nullable_field(self):
+        NullableModel.create_table()
+        obj = NullableModel(value=None)
+        obj.save()
+        fetched = NullableModel.get(id=obj.id)
+        assert fetched.value is None
+
+    def test_save_allows_none_pk_on_insert(self):
+        _create_simple_tables()
+        u = SimpleUser(name="Ada", email="ada@test.com")
+        assert u.id is None
+        u.save()
+        assert u.id is not None
+
+    # -- type rejections ------------------------------------------------------
+
+    def test_save_rejects_str_on_int_field(self):
+        _create_simple_tables()
+        u = SimpleUser(name="x", email="x@test.com", age="old")
+        with pytest.raises(TypeError, match="age"):
+            u.save()
+
+    def test_save_rejects_int_on_str_field(self):
+        _create_simple_tables()
+        u = SimpleUser(name=123, email="x@test.com")
+        with pytest.raises(TypeError, match="name"):
+            u.save()
+
+    def test_save_rejects_str_on_datetime_field(self):
+        _create_timestamp_tables()
+        obj = TimestampModel(created="2024-01-01", day=date.today(), data=b"")
+        with pytest.raises(TypeError, match="created"):
+            obj.save()
+
+    def test_save_rejects_datetime_on_date_field(self):
+        _create_timestamp_tables()
+        obj = TimestampModel(
+            created=datetime.now(), day=datetime.now(), data=b""
+        )
+        with pytest.raises(TypeError, match="day"):
+            obj.save()
+
+    def test_save_rejects_str_on_bytes_field(self):
+        _create_timestamp_tables()
+        obj = TimestampModel(
+            created=datetime.now(), day=date.today(), data="not bytes"
+        )
+        with pytest.raises(TypeError, match="data"):
+            obj.save()
+
+    # -- lenient acceptance ---------------------------------------------------
+
+    def test_save_accepts_bool_on_int_field(self):
+        _create_simple_tables()
+        u = SimpleUser(name="x", email="x@test.com", age=True)
+        u.save()
+        fetched = SimpleUser.get(id=u.id)
+        assert fetched.age == 1
+
+    def test_save_accepts_int_on_float_field(self):
+        class FloatModel(Model):
+            score: float
+
+        FloatModel.create_table()
+        obj = FloatModel(score=100)
+        obj.save()
+        fetched = FloatModel.get(id=obj.id)
+        assert fetched.score == 100.0
+
+    def test_save_accepts_int_on_bool_field(self):
+        _create_timestamp_tables()
+        obj = TimestampModel(
+            created=datetime.now(), day=date.today(), active=1, data=b""
+        )
+        obj.save()
+        fetched = TimestampModel.get(id=obj.id)
+        assert fetched.active is True
+
+    def test_save_accepts_bool_on_float_field(self):
+        class FloatModel2(Model):
+            score: float
+
+        FloatModel2.create_table()
+        obj = FloatModel2(score=True)
+        obj.save()
+        fetched = FloatModel2.get(id=obj.id)
+        assert fetched.score == 1.0
+
+    # -- edge cases -----------------------------------------------------------
+
+    def test_save_skips_validation_for_unknown_types(self):
+        class WeirdModel(Model):
+            data: list
+
+        WeirdModel.create_table()
+        obj = WeirdModel(data="anything goes")
+        obj.save()
+        fetched = WeirdModel.get(id=obj.id)
+        assert fetched.data == "anything goes"
+
+    def test_validation_error_names_field(self):
+        _create_simple_tables()
+        u = SimpleUser(name="x", email="x@test.com", age="bad")
+        with pytest.raises(TypeError, match="age") as exc_info:
+            u.save()
+        assert "int" in str(exc_info.value)
+        assert "str" in str(exc_info.value)
+
+    def test_save_validates_on_update_too(self):
+        _create_simple_tables()
+        u = SimpleUser(name="Ada", email="ada@test.com", age=36)
+        u.save()
+        u.age = "not a number"
+        with pytest.raises(TypeError, match="age"):
+            u.save()

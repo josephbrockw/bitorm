@@ -163,6 +163,52 @@ p.name = "Updated Widget"
 p.save()  # UPDATE (row exists now)
 ```
 
+## Validation
+
+`save()` validates every column before executing SQL. You get a clear Python error naming the field instead of a cryptic SQLite exception.
+
+### Not-Null
+
+Fields with `nullable=False` raise `ValueError` if the value is `None` at save time:
+
+```python
+class User(Model):
+    name: str = Field(nullable=False)
+
+u = User(name=None)
+u.save()  # ValueError: Field 'name' cannot be None (not nullable).
+```
+
+### Type Checking
+
+Values are checked against the column's annotated type. The rules follow Python's type hierarchy:
+
+| Field type   | Accepts              | Rejects           |
+|-------------|----------------------|--------------------|
+| `int`       | `int`, `bool`        | `str`, `float`     |
+| `float`     | `float`, `int`       | `str`              |
+| `str`       | `str`                | `int`, `float`     |
+| `bytes`     | `bytes`              | `str`              |
+| `bool`      | `bool`, `int`        | `str`              |
+| `datetime`  | `datetime`           | `date`, `str`      |
+| `date`      | `date`               | `datetime`, `str`  |
+
+```python
+u = User(name="Ada", email="ada@example.com", age="old")
+u.save()  # TypeError: Field 'age' expects int, got str.
+```
+
+Types not in the table above (e.g., `list`) skip validation and are passed through to SQLite as-is.
+
+Validation runs on both INSERT and UPDATE, so mutating a field to an invalid value after the first save is also caught:
+
+```python
+u = User(name="Ada", email="ada@example.com", age=36)
+u.save()       # OK
+u.age = "old"
+u.save()       # TypeError: Field 'age' expects int, got str.
+```
+
 ## Querying
 
 ### Basic Queries
