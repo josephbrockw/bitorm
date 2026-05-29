@@ -218,6 +218,21 @@ User.all()                    # lazy QuerySet of all rows
 User.get(email="ada@x.com")  # single object or None (raises if >1 match)
 ```
 
+### Get or Create
+
+Look up an object by filter criteria, creating it if it doesn't exist:
+
+```python
+user, created = User.get_or_create(
+    email="ada@example.com",
+    defaults={"name": "Ada", "age": 36},
+)
+# created=True  → new row was inserted
+# created=False → existing row was returned
+```
+
+`**kwargs` are the lookup fields. `defaults` is an optional dict of additional fields applied only when creating — they're not used in the lookup. If `get()` finds multiple matches, `ValueError` is raised (same as calling `get()` directly).
+
 ### Filtering
 
 Filter with Django-style keyword arguments:

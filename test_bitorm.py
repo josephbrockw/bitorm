@@ -267,7 +267,7 @@ class TestFieldAndColumn:
 
     def test_column_ddl_primary_key(self):
         col = _Column("id", int, Field(primary_key=True))
-        assert col.ddl() == "id INTEGER PRIMARY KEY"
+        assert col.ddl() == '"id" INTEGER PRIMARY KEY'
 
     def test_column_ddl_unique_not_null(self):
         col = _Column("email", str, Field(unique=True, nullable=False))
@@ -1399,17 +1399,17 @@ class TestBuildWhere:
 
     def test_build_where_simple_eq(self):
         sql, params = _build_where({"name": "Ada"})
-        assert "name = ?" in sql
+        assert '"name" = ?' in sql
         assert params == ["Ada"]
 
     def test_build_where_with_operator(self):
         sql, params = _build_where({"age__gte": 18})
-        assert "age >= ?" in sql
+        assert '"age" >= ?' in sql
         assert params == [18]
 
     def test_build_where_in(self):
         sql, params = _build_where({"id__in": [1, 2, 3]})
-        assert "id IN (?, ?, ?)" in sql
+        assert '"id" IN (?, ?, ?)' in sql
         assert params == [1, 2, 3]
 
     def test_build_where_in_empty(self):
@@ -1432,7 +1432,7 @@ class TestBuildWhere:
             relations={"author": "author_id"},
             joins=joins,
         )
-        assert "author.name = ?" in sql
+        assert '"author"."name" = ?' in sql
         assert "author" in joins
 
     def test_build_where_relation_with_op(self):
@@ -1443,21 +1443,20 @@ class TestBuildWhere:
             relations={"author": "author_id"},
             joins=joins,
         )
-        assert "author.name LIKE ?" in sql
+        assert '"author"."name" LIKE ?' in sql
         assert "author" in joins
 
     def test_build_where_qualified_with_base(self):
         sql, params = _build_where({"name": "Ada"}, base="post")
-        assert "post.name = ?" in sql
+        assert '"post"."name" = ?' in sql
 
     def test_build_where_unqualified_without_base(self):
         sql, params = _build_where({"name": "Ada"}, base=None)
-        assert sql == "name = ?"
+        assert sql == '"name" = ?'
 
     def test_build_where_field_named_like_operator(self):
-        # FIXED: field named "in" is no longer mistaken for the IN operator
         sql, params = _build_where({"in": 5})
-        assert "in = ?" in sql
+        assert '"in" = ?' in sql
         assert params == [5]
 
 
@@ -1592,20 +1591,20 @@ class TestSQLKeywordFieldNames:
         assert fetched.select_val == "test"
 
     def test_table_named_sql_keyword(self):
-        # BUG: Table names are not quoted either
         KeywordTable = type("KeywordTable", (Model,), {
             "__annotations__": {"name": str},
             "__tablename__": "values",  # "values" is a SQL keyword
         })
-        # SQLite may or may not accept this depending on context
-        try:
-            KeywordTable.create_table()
-            obj = KeywordTable(name="test")
-            obj.save()
-            fetched = KeywordTable.get(id=obj.id)
-            assert fetched.name == "test"
-        except sqlite3.OperationalError:
-            pytest.skip("SQLite rejected SQL keyword as table name (expected bug)")
+        KeywordTable.create_table()
+        obj = KeywordTable(name="test")
+        obj.save()
+        fetched = KeywordTable.get(id=obj.id)
+        assert fetched.name == "test"
+        obj.name = "updated"
+        obj.save()
+        assert KeywordTable.get(id=obj.id).name == "updated"
+        obj.delete()
+        assert KeywordTable.get(id=obj.id) is None
 
 
 # =========================================================================== #
@@ -1865,7 +1864,7 @@ class TestBugFixCoverage:
 
     def test_filter_gt_none_passes_through(self):
         sql, params = _build_where({"age__gt": None})
-        assert "age > ?" in sql
+        assert '"age" > ?' in sql
         assert params == [None]
 
     # -- Fix 5: all operator names as bare fields -----------------------------
@@ -1873,7 +1872,7 @@ class TestBugFixCoverage:
     def test_build_where_all_operator_names_as_fields(self):
         for op_name in _OPERATORS:
             sql, params = _build_where({op_name: 42})
-            assert f"{op_name} = ?" in sql, f"field named '{op_name}' was misinterpreted"
+            assert f'"{op_name}" = ?' in sql, f"field named '{op_name}' was misinterpreted"
             assert params == [42]
 
     # -- Fix 6: FK setter with unsaved object (direct assignment) -------------
@@ -2341,3 +2340,74 @@ class TestAggregates:
     def test_aggregate_respects_filters_no_match(self):
         self._seed_users()
         assert SimpleUser.filter(age__gt=100).sum("age") is None
+
+
+# =========================================================================== #
+# 24. Get or Create
+# =========================================================================== #
+
+class TestGetOrCreate:
+
+    def test_get_or_create_creates_when_missing(self):
+        _create_simple_tables()
+        obj, created = SimpleUser.get_or_create(
+            email="ada@test.com", defaults={"name": "Ada", "age": 36}
+        )
+        assert created is True
+        assert obj.id is not None
+        assert obj.name == "Ada"
+        assert obj.email == "ada@test.com"
+        assert SimpleUser.all().count() == 1
+
+    def test_get_or_create_gets_existing(self):
+        _create_simple_tables()
+        original = SimpleUser(name="Ada", email="ada@test.com", age=36)
+        original.save()
+        obj, created = SimpleUser.get_or_create(
+            email="ada@test.com", defaults={"name": "Different", "age": 99}
+        )
+        assert created is False
+        assert obj.id == original.id
+        assert obj.name == "Ada"
+        assert SimpleUser.all().count() == 1
+
+    def test_get_or_create_uses_defaults_on_create(self):
+        _create_simple_tables()
+        obj, created = SimpleUser.get_or_create(
+            email="ada@test.com", defaults={"name": "Ada", "age": 36}
+        )
+        assert created is True
+        assert obj.age == 36
+        assert obj.name == "Ada"
+
+    def test_get_or_create_ignores_defaults_on_get(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        obj, created = SimpleUser.get_or_create(
+            email="ada@test.com", defaults={"age": 99}
+        )
+        assert created is False
+        assert obj.age == 36
+
+    def test_get_or_create_no_defaults(self):
+        _create_simple_tables()
+        obj, created = SimpleUser.get_or_create(
+            name="Ada", email="ada@test.com"
+        )
+        assert created is True
+        assert obj.name == "Ada"
+        assert obj.age == 0
+
+    def test_get_or_create_multiple_matches_raises(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="a1@test.com", age=30).save()
+        SimpleUser(name="Ada", email="a2@test.com", age=30).save()
+        with pytest.raises(ValueError, match="multiple rows"):
+            SimpleUser.get_or_create(name="Ada")
+
+    def test_get_or_create_validates_on_save(self):
+        _create_simple_tables()
+        with pytest.raises(TypeError, match="age"):
+            SimpleUser.get_or_create(
+                email="ada@test.com", defaults={"name": "Ada", "age": "old"}
+            )

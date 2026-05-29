@@ -132,7 +132,7 @@ class _Column:
         return self.PY_TO_SQL.get(self.py_type, "TEXT")
 
     def ddl(self) -> str:
-        parts = [self.name, self.sql_type]
+        parts = [_qi(self.name), self.sql_type]
         if self.field.primary_key:
             # INTEGER PRIMARY KEY = rowid alias = autoincrement in SQLite.
             parts.append("PRIMARY KEY")
@@ -310,8 +310,8 @@ class _M2MManager:
                 raise ValueError("All objects must be saved before adding to a many-to-many relation.")
         rows = [(self.this_pk_value, getattr(o, o._pk)) for o in objs]
         _db().conn.executemany(
-            f"INSERT OR IGNORE INTO {self.join_table} "
-            f"({self.this_col}, {self.other_col}) VALUES (?, ?)",
+            f"INSERT OR IGNORE INTO {_qi(self.join_table)} "
+            f"({_qi(self.this_col)}, {_qi(self.other_col)}) VALUES (?, ?)",
             rows,
         )
         _db().commit()
@@ -320,8 +320,8 @@ class _M2MManager:
         self._require_saved()
         rows = [(self.this_pk_value, getattr(o, o._pk)) for o in objs]
         _db().conn.executemany(
-            f"DELETE FROM {self.join_table} "
-            f"WHERE {self.this_col} = ? AND {self.other_col} = ?",
+            f"DELETE FROM {_qi(self.join_table)} "
+            f"WHERE {_qi(self.this_col)} = ? AND {_qi(self.other_col)} = ?",
             rows,
         )
         _db().commit()
@@ -329,7 +329,7 @@ class _M2MManager:
     def clear(self) -> None:
         self._require_saved()
         _db().execute(
-            f"DELETE FROM {self.join_table} WHERE {self.this_col} = ?",
+            f"DELETE FROM {_qi(self.join_table)} WHERE {_qi(self.this_col)} = ?",
             (self.this_pk_value,),
         )
         _db().commit()
@@ -338,16 +338,16 @@ class _M2MManager:
         self._require_saved()
         other = self.other_model
         sql = (
-            f"SELECT o.* FROM {other._table} o "
-            f"JOIN {self.join_table} j ON j.{self.other_col} = o.{other._pk} "
-            f"WHERE j.{self.this_col} = ?"
+            f"SELECT o.* FROM {_qi(other._table)} o "
+            f"JOIN {_qi(self.join_table)} j ON j.{_qi(self.other_col)} = o.{_qi(other._pk)} "
+            f"WHERE j.{_qi(self.this_col)} = ?"
         )
         rows = _db().execute(sql, (self.this_pk_value,)).fetchall()
         return [other._from_row(r) for r in rows]
 
     def count(self) -> int:
         self._require_saved()
-        sql = f"SELECT COUNT(*) AS n FROM {self.join_table} WHERE {self.this_col} = ?"
+        sql = f"SELECT COUNT(*) AS n FROM {_qi(self.join_table)} WHERE {_qi(self.this_col)} = ?"
         return _db().execute(sql, (self.this_pk_value,)).fetchone()["n"]
 
     def __iter__(self):
@@ -378,6 +378,11 @@ class _M2MDescriptor:
 # --------------------------------------------------------------------------- #
 # WHERE-clause operators (Django-style suffixes)
 # --------------------------------------------------------------------------- #
+
+def _qi(name: str) -> str:
+    """Quote a SQL identifier (table or column name) with double quotes."""
+    return '"' + name.replace('"', '""') + '"'
+
 
 _OPERATORS = {
     "eq": "=",
@@ -423,11 +428,11 @@ def _build_where(
         if sep and rel in relations:
             if joins is not None:
                 joins.add(rel)
-            ref = f"{rel}.{col}"            # qualified by the join alias
+            ref = f"{_qi(rel)}.{_qi(col)}"
         elif base:
-            ref = f"{base}.{field}"         # plain column on the base table
+            ref = f"{_qi(base)}.{_qi(field)}"
         else:
-            ref = field
+            ref = _qi(field)
 
         if op == "IN":
             if not value:
@@ -509,9 +514,9 @@ class QuerySet:
             rel, sep, col = name.partition("__")
             if sep and rel in relations:        # order by a related field
                 joins.add(rel)
-                ref = f"{rel}.{col}"
+                ref = f"{_qi(rel)}.{_qi(col)}"
             else:
-                ref = f"{base}.{name}"
+                ref = f"{_qi(base)}.{_qi(name)}"
             order_parts.append(f"{ref} {'DESC' if desc else 'ASC'}")
 
         # Build the joins. FK is many-to-one, so a LEFT JOIN never multiplies
@@ -520,13 +525,13 @@ class QuerySet:
         for rel in joins:
             fk = getattr(self.model, rel)  # _ForwardFK descriptor (.to, .col)
             join_sql += (
-                f" LEFT JOIN {fk.to._table} {rel} "
-                f"ON {rel}.{fk.to._pk} = {base}.{fk.col}"
+                f" LEFT JOIN {_qi(fk.to._table)} {_qi(rel)} "
+                f"ON {_qi(rel)}.{_qi(fk.to._pk)} = {_qi(base)}.{_qi(fk.col)}"
             )
 
         # Always qualify + select base.* so joined columns never leak into rows.
         distinct = "DISTINCT " if self._distinct else ""
-        sql = f"SELECT {distinct}{base}.* FROM {base}{join_sql}"
+        sql = f"SELECT {distinct}{_qi(base)}.* FROM {_qi(base)}{join_sql}"
         if where_sql:
             sql += f" WHERE {where_sql}"
         if order_parts:
@@ -568,7 +573,7 @@ class QuerySet:
         qs._limit = None
         sql, params = qs._sql()
         col_obj = next(c for c in self.model._columns if c.name == column)
-        agg_sql = f"SELECT {func}({column}) AS val FROM ({sql})"
+        agg_sql = f"SELECT {func}({_qi(column)}) AS val FROM ({sql})"
         result = _db().execute(agg_sql, tuple(params)).fetchone()["val"]
         if result is not None:
             return col_obj.from_db(result)
@@ -595,7 +600,7 @@ class QuerySet:
                     "(SQLite DELETE can't join). Fetch the rows and "
                     "delete them individually instead."
                 )
-        sql = f"DELETE FROM {self.model._table}"
+        sql = f"DELETE FROM {_qi(self.model._table)}"
         params: list = []
         if self._filters:
             where, params = _build_where(self._filters)  # unqualified, no joins
@@ -682,7 +687,7 @@ class Model:
             if isinstance(raw, ForeignKey):
                 fk = raw
                 col_name = f"{name}_id"
-                ref = f"{fk.to._table}({fk.to._pk})"
+                ref = f"{_qi(fk.to._table)}({_qi(fk.to._pk)})"
                 if fk.on_delete:
                     ref += f" ON DELETE {fk.on_delete}"
                 columns.append(
@@ -763,22 +768,22 @@ class Model:
     def create_table(cls, if_not_exists: bool = True) -> None:
         cols_ddl = ", ".join(c.ddl() for c in cls._columns)
         exists = "IF NOT EXISTS " if if_not_exists else ""
-        _db().execute(f"CREATE TABLE {exists}{cls._table} ({cols_ddl})")
+        _db().execute(f"CREATE TABLE {exists}{_qi(cls._table)} ({cols_ddl})")
         # create any m2m join tables owned by this model
         for join_table, owner_col, target_col, target in cls._m2m:
             _db().execute(
-                f"CREATE TABLE IF NOT EXISTS {join_table} ("
-                f"{owner_col} INTEGER NOT NULL "
-                f"REFERENCES {cls._table}({cls._pk}) ON DELETE CASCADE, "
-                f"{target_col} INTEGER NOT NULL "
-                f"REFERENCES {target._table}({target._pk}) ON DELETE CASCADE, "
-                f"PRIMARY KEY ({owner_col}, {target_col}))"
+                f"CREATE TABLE IF NOT EXISTS {_qi(join_table)} ("
+                f"{_qi(owner_col)} INTEGER NOT NULL "
+                f"REFERENCES {_qi(cls._table)}({_qi(cls._pk)}) ON DELETE CASCADE, "
+                f"{_qi(target_col)} INTEGER NOT NULL "
+                f"REFERENCES {_qi(target._table)}({_qi(target._pk)}) ON DELETE CASCADE, "
+                f"PRIMARY KEY ({_qi(owner_col)}, {_qi(target_col)}))"
             )
         _db().commit()
 
     @classmethod
     def drop_table(cls) -> None:
-        _db().execute(f"DROP TABLE IF EXISTS {cls._table}")
+        _db().execute(f"DROP TABLE IF EXISTS {_qi(cls._table)}")
         _db().commit()
 
     # -- row <-> object -----------------------------------------------------
@@ -807,16 +812,16 @@ class Model:
             values = [c.to_db(getattr(self, c.name)) for c in data_cols]
             placeholders = ", ".join("?" for _ in names)
             sql = (
-                f"INSERT INTO {self._table} ({', '.join(names)}) "
+                f"INSERT INTO {_qi(self._table)} ({', '.join(_qi(n) for n in names)}) "
                 f"VALUES ({placeholders})"
             )
             cur = _db().execute(sql, tuple(values))
             setattr(self, pk, cur.lastrowid)  # populate generated id
         else:  # UPDATE
-            assignments = ", ".join(f"{c.name} = ?" for c in data_cols)
+            assignments = ", ".join(f"{_qi(c.name)} = ?" for c in data_cols)
             values = [c.to_db(getattr(self, c.name)) for c in data_cols]
             values.append(pk_value)
-            sql = f"UPDATE {self._table} SET {assignments} WHERE {pk} = ?"
+            sql = f"UPDATE {_qi(self._table)} SET {assignments} WHERE {_qi(pk)} = ?"
             cur = _db().execute(sql, tuple(values))
             if cur.rowcount == 0:
                 all_cols = self._columns
@@ -824,7 +829,7 @@ class Model:
                 vals = [c.to_db(getattr(self, c.name)) for c in all_cols]
                 placeholders = ", ".join("?" for _ in names)
                 sql = (
-                    f"INSERT INTO {self._table} ({', '.join(names)}) "
+                    f"INSERT INTO {_qi(self._table)} ({', '.join(_qi(n) for n in names)}) "
                     f"VALUES ({placeholders})"
                 )
                 _db().execute(sql, tuple(vals))
@@ -837,7 +842,7 @@ class Model:
         if pk_value is None:
             raise ValueError("Cannot delete an unsaved object (no primary key).")
         _db().execute(
-            f"DELETE FROM {self._table} WHERE {self._pk} = ?", (pk_value,)
+            f"DELETE FROM {_qi(self._table)} WHERE {_qi(self._pk)} = ?", (pk_value,)
         )
         _db().commit()
         setattr(self, self._pk, None)
@@ -858,3 +863,19 @@ class Model:
         if len(results) > 1:
             raise ValueError(f"get() matched multiple rows for {kwargs!r}")
         return results[0] if results else None
+
+    @classmethod
+    def get_or_create(cls, defaults: Optional[dict] = None, **kwargs) -> tuple["Model", bool]:
+        """Fetch a row matching kwargs, or create one.
+
+        Returns (instance, created) where created is True if a new row was inserted.
+        """
+        obj = cls.get(**kwargs)
+        if obj is not None:
+            return obj, False
+        create_kwargs = dict(kwargs)
+        if defaults:
+            create_kwargs.update(defaults)
+        obj = cls(**create_kwargs)
+        obj.save()
+        return obj, True
