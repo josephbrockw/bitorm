@@ -1,34 +1,12 @@
 # BitORM Roadmap
 
-## Migrations
+## ~~Migrations~~ (Done)
 
-**Problem:** There's `create_table()` and `drop_table()`, but no way to evolve a schema. Adding a column to an existing table requires dropping and recreating it, losing all data.
+Implemented in `db.py`. See README for usage. Forward-only file-based migrations with auto-detection via `make_migration()` and `migrate()`. Migration files live in `{db_name}_migrations/`. Supports add/remove tables, add/remove columns, and column type/constraint changes via the 12-step table rebuild pattern.
 
-**Planned API:**
-
-```python
-from bitorm import connect, migrate
-
-db = connect("app.db")
-
-# Detect differences between model definitions and the actual schema
-migrate(db)
-```
-
-`migrate()` introspects the SQLite schema (`PRAGMA table_info`, `PRAGMA foreign_key_list`) and compares it to the current model definitions. It generates and executes the necessary ALTER TABLE statements.
-
-**Supported operations:**
-- Add column (`ALTER TABLE ... ADD COLUMN ...`)
-- Drop column (SQLite 3.35+ supports `ALTER TABLE ... DROP COLUMN`)
-- Rename column (`ALTER TABLE ... RENAME COLUMN ... TO ...`, SQLite 3.25+)
-- Add/remove table
-
-**Out of scope (initially):**
-- Column type changes (requires table rebuild)
+**Not yet supported:**
+- Column renames (write a manual migration with `ALTER TABLE ... RENAME COLUMN`)
 - Index management
-- Migration history / versioning (no migrations table — this is a diff-and-apply tool)
-
-**Approach:** Since SQLite has limited ALTER TABLE support, complex changes (type changes, reordering) would use the [12-step table rebuild](https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes) pattern: create new table, copy data, drop old, rename. This is the same approach sqlite-utils uses for its `transform` API.
 
 ## Raw SQL Escape Hatch
 

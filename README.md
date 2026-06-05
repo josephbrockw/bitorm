@@ -1,6 +1,6 @@
 # BitORM
 
-A lightweight SQLite ORM in a single Python file. Zero dependencies beyond the standard library.
+A lightweight SQLite ORM. Zero dependencies beyond the standard library.
 
 ## Requirements
 
@@ -8,7 +8,7 @@ Python 3.11+
 
 ## Installation
 
-Copy `bitorm.py` into your project. That's it — there's nothing to install.
+Copy `bitorm.py` and `db.py` into your project. That's it — there's nothing to install.
 
 If you're using it as a package:
 
@@ -132,6 +132,70 @@ User.create_table()                    # CREATE TABLE IF NOT EXISTS ...
 User.create_table(if_not_exists=False) # raises if table already exists
 User.drop_table()                      # DROP TABLE IF EXISTS ...
 ```
+
+## Migrations
+
+`create_table()` works for new projects, but once your database has data you need migrations to evolve the schema without losing it.
+
+### Generating a Migration
+
+```python
+from bitorm import connect, make_migration, migrate
+
+db = connect("app.db")
+
+# Auto-detect differences between your models and the database schema
+make_migration(db, name="initial")
+# Creates app_migrations/001_initial.py
+```
+
+`make_migration` introspects the database with `PRAGMA table_info` and compares it to your current model definitions. It generates a migration file with the necessary SQL.
+
+You can scope it to specific models:
+
+```python
+make_migration(db, name="add_users", models=[User, Post])
+```
+
+If no models are passed, all `Model` subclasses are included.
+
+### Applying Migrations
+
+```python
+applied = migrate(db)
+# Returns list of applied migration names, e.g. ["001_initial"]
+```
+
+`migrate` discovers all `NNN_name.py` files in the migrations directory, skips any already applied, and runs the rest in order. Applied migrations are tracked in a `_migrations` table.
+
+### Migration Files
+
+Generated files are plain Python with a `forward(db)` function:
+
+```python
+"""
+  - Create table user
+  - Create table post
+"""
+
+
+def forward(db):
+    db.execute("CREATE TABLE \"user\" (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT)")
+    db.execute("CREATE TABLE \"post\" (\"id\" INTEGER PRIMARY KEY, \"title\" TEXT)")
+    db.commit()
+```
+
+You can also write migration files by hand for operations that auto-detection can't handle, like column renames or data migrations. Any file matching `NNN_name.py` with a `forward(db)` function will be picked up.
+
+### Supported Operations
+
+- Add/remove tables
+- Add/remove columns (`ALTER TABLE ADD/DROP COLUMN`)
+- Column type, nullability, or uniqueness changes (uses SQLite's table rebuild pattern)
+
+### Migration Directory
+
+The directory is derived from the database filename: `app.db` uses `app_migrations/`, `data.db` uses `data_migrations/`, etc. In-memory databases don't support migrations — use `create_table()` directly.
 
 ## Saving and Deleting
 
@@ -435,5 +499,5 @@ BitORM automatically handles conversion between Python and SQLite:
 ## Running Tests
 
 ```
-uv run pytest test_bitorm.py -v
+uv run pytest test_bitorm.py test_migrations.py -v
 ```
