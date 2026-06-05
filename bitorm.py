@@ -32,15 +32,19 @@ Quick start:
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
+import os
 import sqlite3
 from datetime import datetime, date
+from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from db import Database, connect, _db, make_migration, migrate  # noqa: F401
 
 __all__ = [
-    "Model", "Field", "ForeignKey", "ManyToMany",
+    "Model", "Field", "FileField", "ForeignKey", "ManyToMany",
     "connect", "Database", "make_migration", "migrate",
 ]
 
@@ -72,6 +76,106 @@ class Field:
         self.nullable = nullable
         self.default = default
         self.default_factory = default_factory
+
+
+class FileField:
+    """Reference a file on disk. Stores a relative path as TEXT in the DB."""
+
+    def __init__(self, *, base_dir: str = "", nullable: bool = True):
+        self.base_dir = base_dir
+        self.nullable = nullable
+
+
+class FileRef:
+    """Returned when accessing a FileField. Provides file operations."""
+
+    def __init__(self, relative: str, base_path: Path):
+        self.relative = relative
+        self._base = base_path
+        self._hash_cache: Optional[str] = None
+
+    @property
+    def path(self) -> Path:
+        return self._base / self.relative
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        return self.path.read_text(encoding=encoding)
+
+    def read_bytes(self) -> bytes:
+        return self.path.read_bytes()
+
+    def read_json(self, encoding: str = "utf-8") -> Any:
+        return json.loads(self.read_text(encoding=encoding))
+
+    @property
+    def exists(self) -> bool:
+        return self.path.exists()
+
+    @property
+    def size(self) -> int:
+        return self.path.stat().st_size
+
+    @property
+    def ext(self) -> str:
+        return self.path.suffix
+
+    @property
+    def stem(self) -> str:
+        return self.path.stem
+
+    @property
+    def hash(self) -> str:
+        if self._hash_cache is None:
+            h = hashlib.sha256()
+            with open(self.path, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    h.update(chunk)
+            self._hash_cache = h.hexdigest()
+        return self._hash_cache
+
+    def __str__(self) -> str:
+        return self.relative
+
+    def __repr__(self) -> str:
+        return f"FileRef({self.relative!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FileRef):
+            return self.relative == other.relative and self._base == other._base
+        return NotImplemented
+
+
+class _FileDescriptor:
+    """Installed on a Model class for each FileField. Returns FileRef on access."""
+
+    def __init__(self, name: str, base_dir: str):
+        self.name = name
+        self.base_dir = base_dir
+
+    def _resolve_base(self) -> Path:
+        db = _db()
+        if db.path == ":memory:" or not db.path:
+            return Path(self.base_dir) if self.base_dir else Path(".")
+        db_dir = Path(os.path.abspath(db.path)).parent
+        if self.base_dir:
+            return db_dir / self.base_dir
+        return db_dir
+
+    def __get__(self, instance: Any, owner: type) -> Any:
+        if instance is None:
+            return self
+        raw = instance.__dict__.get(self.name)
+        if raw is None:
+            return None
+        return FileRef(raw, self._resolve_base())
+
+    def __set__(self, instance: Any, value: Any) -> None:
+        if value is None:
+            instance.__dict__[self.name] = None
+        elif isinstance(value, FileRef):
+            instance.__dict__[self.name] = value.relative
+        else:
+            instance.__dict__[self.name] = str(value)
 
 
 class _Column:
@@ -115,6 +219,8 @@ class _Column:
     def to_db(self, value: Any) -> Any:
         if value is None:
             return None
+        if isinstance(value, FileRef):
+            return value.relative
         if self.py_type in (datetime, date):
             return value.isoformat()
         if self.py_type is bool:
@@ -139,6 +245,9 @@ class _Column:
                 raise ValueError(
                     f"Field '{self.name}' cannot be None (not nullable)."
                 )
+            return
+
+        if isinstance(value, FileRef):
             return
 
         if self.py_type not in self.PY_TO_SQL:
@@ -673,6 +782,13 @@ class Model:
                 # reverse accessor on the target (user.posts)
                 related = fk.related_name or f"{cls.__name__.lower()}s"
                 setattr(fk.to, related, _ReverseFK(cls, col_name))
+                continue
+
+            # ---- file field --------------------------------------------------
+            if isinstance(raw, FileField):
+                ff = raw
+                columns.append(_Column(name, str, Field(nullable=ff.nullable)))
+                setattr(cls, name, _FileDescriptor(name, ff.base_dir))
                 continue
 
             # ---- normal column ----------------------------------------------

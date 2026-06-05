@@ -487,6 +487,65 @@ Custom reverse name:
 tags: list = ManyToMany(Tag, related_name="tagged_articles")
 ```
 
+## File Fields
+
+Reference files on disk with portable paths. Useful for managing datasets of documents, images, or any file-based data alongside structured metadata.
+
+```python
+class Email(Model):
+    subject: str
+    sender: str
+    raw: str = FileField(base_dir="emails")
+
+class TrainingImage(Model):
+    label: str
+    split: str = "train"
+    image: str = FileField(base_dir="images")
+```
+
+The database stores a relative path as TEXT. On access, you get a `FileRef` object with file operations:
+
+```python
+email = Email.get(id=1)
+
+email.raw                    # FileRef('inbox/msg_001.eml')
+email.raw.relative           # 'inbox/msg_001.eml' (the stored path)
+email.raw.path               # Path('/abs/project/emails/inbox/msg_001.eml')
+email.raw.read_text()        # file contents as string
+email.raw.read_bytes()       # file contents as bytes
+email.raw.read_json()        # json.loads(file contents)
+email.raw.exists             # True/False
+email.raw.size               # file size in bytes
+email.raw.ext                # '.eml'
+email.raw.stem               # 'msg_001'
+email.raw.hash               # SHA-256 hex digest (cached)
+str(email.raw)               # 'inbox/msg_001.eml'
+```
+
+Set values with a string path relative to `base_dir`:
+
+```python
+email = Email(subject="Hello", sender="ada@example.com", raw="inbox/msg_001.eml")
+email.save()
+```
+
+### Path Resolution
+
+Paths resolve as: **DB directory / base_dir / stored path**
+
+With `connect("project/app.db")` and `FileField(base_dir="emails")`, storing `"inbox/msg_001.eml"` resolves to `/abs/project/emails/inbox/msg_001.eml`. If `base_dir` is omitted, files resolve relative to the DB directory.
+
+This makes the setup portable — move the project folder and everything still works.
+
+### Options
+
+```python
+FileField(
+    base_dir="emails",     # subdirectory for this field's files (default: "")
+    nullable=True,         # allow NULL (default)
+)
+```
+
 ## Type Serialization
 
 BitORM automatically handles conversion between Python and SQLite:
@@ -499,5 +558,5 @@ BitORM automatically handles conversion between Python and SQLite:
 ## Running Tests
 
 ```
-uv run pytest test_bitorm.py test_migrations.py -v
+uv run pytest tests/ -v
 ```
