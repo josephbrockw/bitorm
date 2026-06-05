@@ -11,6 +11,7 @@ from datetime import datetime, date, timezone, timedelta
 
 import pytest
 
+import db as _db_module
 import bitorm
 from bitorm import (
     Model,
@@ -126,6 +127,18 @@ class M2MCustomRelArticle(Model):
     tags: list = ManyToMany(M2MCustomRelTag, related_name="tagged_articles")
 
 
+# M2M multiple fields to same target
+class M2MRecipient(Model):
+    name: str
+
+
+class M2MEmail(Model):
+    subject: str
+    to_users: list = ManyToMany(M2MRecipient, related_name="emails_to")
+    cc_users: list = ManyToMany(M2MRecipient, related_name="emails_cc")
+    bcc_users: list = ManyToMany(M2MRecipient, related_name="emails_bcc")
+
+
 # Custom PK model
 class CustomPKModel(Model):
     uid: int = Field(primary_key=True)
@@ -152,7 +165,7 @@ def db():
     """Fresh in-memory database for every test."""
     database = connect(":memory:")
     yield database
-    bitorm._default_db = None
+    _db_module._default_db = None
 
 
 def _create_simple_tables():
@@ -203,6 +216,11 @@ def _create_m2m_custom_rel_tables():
     M2MCustomRelArticle.create_table()
 
 
+def _create_m2m_multi_tables():
+    M2MRecipient.create_table()
+    M2MEmail.create_table()
+
+
 # =========================================================================== #
 # 1. Database Connection
 # =========================================================================== #
@@ -210,7 +228,7 @@ def _create_m2m_custom_rel_tables():
 class TestDatabaseConnection:
 
     def test_db_raises_without_connect(self):
-        bitorm._default_db = None
+        _db_module._default_db = None
         with pytest.raises(RuntimeError, match="No database connected"):
             _db()
 
@@ -450,7 +468,7 @@ class TestCreateAndDropTable:
     def test_create_table_with_m2m_creates_join_table(self):
         _create_m2m_tables()
         row = _db().execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='m2marticle_m2mtag'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='m2marticle_tags'"
         ).fetchone()
         assert row is not None
 
@@ -1355,7 +1373,7 @@ class TestManyToMany:
         article_id = article.id
         article.delete()
         rows = _db().execute(
-            "SELECT * FROM m2marticle_m2mtag WHERE m2marticle_id = ?", (article_id,)
+            "SELECT * FROM m2marticle_tags WHERE m2marticle_id = ?", (article_id,)
         ).fetchall()
         assert len(rows) == 0
 
@@ -1369,7 +1387,7 @@ class TestManyToMany:
         tag_id = tag.id
         tag.delete()
         rows = _db().execute(
-            "SELECT * FROM m2marticle_m2mtag WHERE m2mtag_id = ?", (tag_id,)
+            "SELECT * FROM m2marticle_tags WHERE m2mtag_id = ?", (tag_id,)
         ).fetchall()
         assert len(rows) == 0
 
@@ -1760,7 +1778,7 @@ class TestEdgeCasesAndStress:
         assert fetched.name == cjk
 
     def test_create_table_before_connect(self):
-        bitorm._default_db = None
+        _db_module._default_db = None
         with pytest.raises(RuntimeError, match="No database connected"):
             SimpleUser.create_table()
 
@@ -2411,3 +2429,149 @@ class TestGetOrCreate:
             SimpleUser.get_or_create(
                 email="ada@test.com", defaults={"name": "Ada", "age": "old"}
             )
+
+
+# =========================================================================== #
+# Many-to-Many: Multiple fields to the same target
+# =========================================================================== #
+
+class TestManyToManyMultipleToSameTarget:
+
+    def test_creates_distinct_junction_tables(self):
+        _create_m2m_multi_tables()
+        cur = _db().conn.cursor()
+        for table in ("m2memail_to_users", "m2memail_cc_users", "m2memail_bcc_users"):
+            row = cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            assert row is not None, f"Junction table {table} was not created"
+
+    def test_fields_are_independent(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        bob = M2MRecipient(name="Bob"); bob.save()
+        carol = M2MRecipient(name="Carol"); carol.save()
+        email = M2MEmail(subject="Hello"); email.save()
+
+        email.to_users.add(alice)
+        email.cc_users.add(bob)
+        email.bcc_users.add(carol)
+
+        assert email.to_users.count() == 1
+        assert email.cc_users.count() == 1
+        assert email.bcc_users.count() == 1
+        assert email.to_users.all()[0].name == "Alice"
+        assert email.cc_users.all()[0].name == "Bob"
+        assert email.bcc_users.all()[0].name == "Carol"
+
+    def test_same_object_in_multiple_fields(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        email = M2MEmail(subject="Hello"); email.save()
+
+        email.to_users.add(alice)
+        email.cc_users.add(alice)
+
+        assert email.to_users.count() == 1
+        assert email.cc_users.count() == 1
+        assert email.bcc_users.count() == 0
+
+    def test_remove_from_one_field_doesnt_affect_other(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        email = M2MEmail(subject="Hello"); email.save()
+
+        email.to_users.add(alice)
+        email.cc_users.add(alice)
+        email.to_users.remove(alice)
+
+        assert email.to_users.count() == 0
+        assert email.cc_users.count() == 1
+
+    def test_clear_one_field_doesnt_affect_others(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        bob = M2MRecipient(name="Bob"); bob.save()
+        email = M2MEmail(subject="Hello"); email.save()
+
+        email.to_users.add(alice)
+        email.cc_users.add(bob)
+        email.bcc_users.add(alice, bob)
+        email.cc_users.clear()
+
+        assert email.to_users.count() == 1
+        assert email.cc_users.count() == 0
+        assert email.bcc_users.count() == 2
+
+    def test_reverse_accessors(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        email1 = M2MEmail(subject="First"); email1.save()
+        email2 = M2MEmail(subject="Second"); email2.save()
+
+        email1.to_users.add(alice)
+        email2.cc_users.add(alice)
+
+        to_emails = alice.emails_to.all()
+        cc_emails = alice.emails_cc.all()
+        bcc_emails = alice.emails_bcc.all()
+
+        assert len(to_emails) == 1
+        assert to_emails[0].subject == "First"
+        assert len(cc_emails) == 1
+        assert cc_emails[0].subject == "Second"
+        assert len(bcc_emails) == 0
+
+    def test_cascade_delete_owner(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        email = M2MEmail(subject="Hello"); email.save()
+        email_id = email.id
+
+        email.to_users.add(alice)
+        email.cc_users.add(alice)
+        email.bcc_users.add(alice)
+        email.delete()
+
+        cur = _db().conn.cursor()
+        for table in ("m2memail_to_users", "m2memail_cc_users", "m2memail_bcc_users"):
+            rows = cur.execute(
+                f"SELECT * FROM {table} WHERE m2memail_id = ?", (email_id,)
+            ).fetchall()
+            assert len(rows) == 0, f"Rows remain in {table} after owner delete"
+
+    def test_cascade_delete_target(self):
+        _create_m2m_multi_tables()
+        alice = M2MRecipient(name="Alice"); alice.save()
+        bob = M2MRecipient(name="Bob"); bob.save()
+        alice_id = alice.id
+        email = M2MEmail(subject="Hello"); email.save()
+
+        email.to_users.add(alice, bob)
+        email.cc_users.add(alice)
+        alice.delete()
+
+        assert email.to_users.count() == 1
+        assert email.to_users.all()[0].name == "Bob"
+        assert email.cc_users.count() == 0
+
+        cur = _db().conn.cursor()
+        for table in ("m2memail_to_users", "m2memail_cc_users", "m2memail_bcc_users"):
+            rows = cur.execute(
+                f"SELECT * FROM {table} WHERE m2mrecipient_id = ?", (alice_id,)
+            ).fetchall()
+            assert len(rows) == 0
+
+    def test_junction_table_naming_convention(self):
+        assert M2MEmail._m2m[0][0] == "m2memail_to_users"
+        assert M2MEmail._m2m[1][0] == "m2memail_cc_users"
+        assert M2MEmail._m2m[2][0] == "m2memail_bcc_users"
+
+    def test_missing_related_name_raises(self):
+        with pytest.raises(ValueError, match="related_name"):
+            class _Target(Model):
+                name: str
+            class _BadModel(Model):
+                a: list = ManyToMany(_Target)
+                b: list = ManyToMany(_Target)

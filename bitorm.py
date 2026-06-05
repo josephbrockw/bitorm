@@ -37,46 +37,12 @@ import sqlite3
 from datetime import datetime, date
 from typing import Any, Iterator, Optional
 
-__all__ = ["Model", "Field", "ForeignKey", "ManyToMany", "connect", "Database"]
+from db import Database, connect, _db, make_migration, migrate  # noqa: F401
 
-
-# --------------------------------------------------------------------------- #
-# Connection handling
-# --------------------------------------------------------------------------- #
-
-class Database:
-    """Thin wrapper over a sqlite3 connection with sensible defaults."""
-
-    def __init__(self, path: str = ":memory:"):
-        self.conn = sqlite3.connect(path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-
-    def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        return self.conn.execute(sql, params)
-
-    def commit(self) -> None:
-        self.conn.commit()
-
-    def close(self) -> None:
-        self.conn.close()
-
-
-# A single module-level default connection, set via connect().
-_default_db: Optional[Database] = None
-
-
-def connect(path: str = ":memory:") -> Database:
-    """Open (or replace) the default database used by all models."""
-    global _default_db
-    _default_db = Database(path)
-    return _default_db
-
-
-def _db() -> Database:
-    if _default_db is None:
-        raise RuntimeError("No database connected. Call connect(path) first.")
-    return _default_db
+__all__ = [
+    "Model", "Field", "ForeignKey", "ManyToMany",
+    "connect", "Database", "make_migration", "migrate",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -672,7 +638,7 @@ class Model:
             # ---- many-to-many ------------------------------------------------
             if isinstance(raw, ManyToMany):
                 rel = raw
-                join_table = f"{cls._table}_{rel.to._table}"
+                join_table = f"{cls._table}_{name}"
                 owner_col = f"{cls._table}_id"
                 target_col = f"{rel.to._table}_id"
                 m2m.append((join_table, owner_col, target_col, rel.to))
@@ -680,6 +646,14 @@ class Model:
                 setattr(cls, name, _M2MDescriptor(join_table, owner_col, target_col, rel.to))
                 # reverse manager on the target (tag.posts)
                 related = rel.related_name or f"{cls.__name__.lower()}s"
+                if hasattr(rel.to, related) and isinstance(getattr(rel.to, related), _M2MDescriptor):
+                    existing = getattr(rel.to, related)
+                    if existing.other_model is cls:
+                        raise ValueError(
+                            f"M2M field '{name}' on {cls.__name__} would overwrite "
+                            f"reverse accessor '{related}' on {rel.to.__name__}. "
+                            f"Specify a unique related_name."
+                        )
                 setattr(rel.to, related, _M2MDescriptor(join_table, target_col, owner_col, cls))
                 continue
 
