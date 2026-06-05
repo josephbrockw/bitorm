@@ -282,6 +282,23 @@ User.all()                    # lazy QuerySet of all rows
 User.get(email="ada@x.com")  # single object or None (raises if >1 match)
 ```
 
+### Raw SQL
+
+For queries the ORM can't express — GROUP BY, window functions, CTEs, complex joins:
+
+```python
+# Returns model instances (deserialized through _from_row)
+users = User.raw("SELECT * FROM user WHERE age > ? ORDER BY name", (18,))
+
+# Returns raw sqlite3.Row objects (for aggregations, cross-table queries)
+db = connect("app.db")
+rows = db.raw("SELECT label, COUNT(*) as cnt FROM classification GROUP BY label")
+for row in rows:
+    print(row["label"], row["cnt"])
+```
+
+Both methods use parameterized queries. `Model.raw()` applies the same type deserialization as normal queries (datetime, date, bool).
+
 ### Get or Create
 
 Look up an object by filter criteria, creating it if it doesn't exist:

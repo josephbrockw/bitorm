@@ -939,6 +939,12 @@ class Model:
 
     # -- query entry points -------------------------------------------------
     @classmethod
+    def raw(cls, sql: str, params: tuple = ()) -> list["Model"]:
+        """Execute raw SQL and return model instances."""
+        rows = _db().execute(sql, tuple(params)).fetchall()
+        return [cls._from_row(r) for r in rows]
+
+    @classmethod
     def filter(cls, **kwargs) -> QuerySet:
         return QuerySet(cls).filter(**kwargs)
 

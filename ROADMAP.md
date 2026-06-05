@@ -8,24 +8,9 @@ Implemented in `db.py`. See README for usage. Forward-only file-based migrations
 - Column renames (write a manual migration with `ALTER TABLE ... RENAME COLUMN`)
 - Index management
 
-## Raw SQL Escape Hatch
+## ~~Raw SQL Escape Hatch~~ (Done)
 
-**Problem:** The ORM can't express every query. Users who need window functions, CTEs, complex joins, or database-specific features have to bypass the ORM entirely and manage their own connections.
-
-**Planned API:**
-
-```python
-# Returns a list of model instances
-users = User.raw("SELECT * FROM simpleuser WHERE age > ? ORDER BY name", [18])
-
-# Returns raw sqlite3.Row objects when no model mapping is needed
-rows = db.raw("SELECT name, COUNT(*) as cnt FROM simpleuser GROUP BY name")
-```
-
-**Scope:**
-- `Model.raw(sql, params)` — executes SQL, maps results through `_from_row()`, returns a list of model instances. The SQL must select all columns the model expects.
-- `Database.raw(sql, params)` — executes SQL, returns a list of `sqlite3.Row` objects. For queries that don't map to a model (aggregations, joins across multiple tables, etc.).
-- Both use parameterized queries — no f-string SQL.
+Implemented as `Model.raw(sql, params)` and `Database.raw(sql, params)`. See README for usage.
 
 ## Transactions
 

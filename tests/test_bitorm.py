@@ -2575,3 +2575,106 @@ class TestManyToManyMultipleToSameTarget:
             class _BadModel(Model):
                 a: list = ManyToMany(_Target)
                 b: list = ManyToMany(_Target)
+
+
+# =========================================================================== #
+# 26. Raw SQL
+# =========================================================================== #
+
+class TestRawSQL:
+
+    def test_model_raw_returns_instances(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        results = SimpleUser.raw("SELECT * FROM simpleuser ORDER BY name")
+        assert len(results) == 2
+        assert isinstance(results[0], SimpleUser)
+        assert results[0].name == "Ada"
+        assert results[1].name == "Bob"
+
+    def test_model_raw_with_params(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        results = SimpleUser.raw(
+            "SELECT * FROM simpleuser WHERE age > ?", (30,)
+        )
+        assert len(results) == 1
+        assert results[0].name == "Ada"
+
+    def test_model_raw_deserializes_types(self):
+        _create_timestamp_tables()
+        dt = datetime(2024, 6, 15, 12, 30, 0)
+        d = date(2024, 6, 15)
+        TimestampModel(created=dt, day=d, active=True, data=b"x").save()
+        results = TimestampModel.raw("SELECT * FROM timestampmodel")
+        assert isinstance(results[0].created, datetime)
+        assert results[0].created == dt
+        assert isinstance(results[0].day, date)
+        assert results[0].active is True
+
+    def test_model_raw_empty_result(self):
+        _create_simple_tables()
+        results = SimpleUser.raw("SELECT * FROM simpleuser WHERE id = ?", (999,))
+        assert results == []
+
+    def test_model_raw_with_join(self):
+        _create_fk_tables()
+        a = FKAuthor(name="Ada", email="ada@test.com")
+        a.save()
+        FKPost(title="Hello", body="World", author=a).save()
+        results = FKPost.raw(
+            "SELECT p.* FROM fkpost p "
+            "JOIN fkauthor a ON a.id = p.author_id "
+            "WHERE a.name = ?",
+            ("Ada",),
+        )
+        assert len(results) == 1
+        assert results[0].title == "Hello"
+
+    def test_model_raw_with_list_params(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        results = SimpleUser.raw(
+            "SELECT * FROM simpleuser WHERE age = ?", [36]
+        )
+        assert len(results) == 1
+
+    def test_database_raw_returns_rows(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        rows = _db().raw("SELECT name, age FROM simpleuser ORDER BY name")
+        assert len(rows) == 2
+        assert rows[0]["name"] == "Ada"
+        assert rows[1]["age"] == 25
+
+    def test_database_raw_aggregation(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=25).save()
+        rows = _db().raw(
+            "SELECT COUNT(*) as cnt, AVG(age) as avg_age FROM simpleuser"
+        )
+        assert rows[0]["cnt"] == 2
+        assert rows[0]["avg_age"] == 30.5
+
+    def test_database_raw_group_by(self):
+        _create_simple_tables()
+        SimpleUser(name="Ada", email="ada@test.com", age=36).save()
+        SimpleUser(name="Bob", email="bob@test.com", age=36).save()
+        SimpleUser(name="Cal", email="cal@test.com", age=25).save()
+        rows = _db().raw(
+            "SELECT age, COUNT(*) as cnt FROM simpleuser GROUP BY age ORDER BY age"
+        )
+        assert len(rows) == 2
+        assert rows[0]["age"] == 25
+        assert rows[0]["cnt"] == 1
+        assert rows[1]["age"] == 36
+        assert rows[1]["cnt"] == 2
+
+    def test_database_raw_empty_result(self):
+        _create_simple_tables()
+        rows = _db().raw("SELECT * FROM simpleuser WHERE id = ?", (999,))
+        assert rows == []

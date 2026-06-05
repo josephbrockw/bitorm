@@ -28,6 +28,10 @@ class Database:
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         return self.conn.execute(sql, params)
 
+    def raw(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Execute raw SQL and return a list of sqlite3.Row objects."""
+        return self.execute(sql, params).fetchall()
+
     def commit(self) -> None:
         self.conn.commit()
 
