@@ -254,8 +254,8 @@ def _diff_schemas(
 # --------------------------------------------------------------------------- #
 
 def _qi(name: str) -> str:
-    from bitorm import _qi as bitorm_qi
-    return bitorm_qi(name)
+    from fields import _qi as fields_qi
+    return fields_qi(name)
 
 
 def _col_ddl(col: ColumnSchema) -> str:
