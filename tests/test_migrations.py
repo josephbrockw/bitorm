@@ -7,7 +7,7 @@ import tempfile
 import pytest
 
 from bitorm import Model, Field, ForeignKey, ManyToMany, Database
-from db import (
+from bitorm.db import (
     connect,
     _db,
     _get_db_schema,
@@ -26,7 +26,7 @@ from db import (
     SchemaDiff,
     _default_db,
 )
-import db as _db_module
+import bitorm.db as _db_module
 
 
 # --------------------------------------------------------------------------- #

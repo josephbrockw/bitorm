@@ -8,7 +8,7 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Optional
 
-from db import _db
+from .db import _db
 
 
 # Marker so "no default given" is distinguishable from "default is None".
@@ -310,7 +310,7 @@ class _ReverseFK:
     def __get__(self, instance, owner):
         if instance is None:
             return self
-        from bitorm import QuerySet
+        from .models import QuerySet
         pk_value = getattr(instance, instance._pk)
         return QuerySet(self.related_model).filter(**{self.fk_col: pk_value})
 

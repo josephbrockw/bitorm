@@ -11,9 +11,9 @@ from datetime import datetime, date, timezone, timedelta
 
 import pytest
 
-import db as _db_module
+import bitorm.db as _db_module
 import bitorm
-from bitorm import (
+from bitorm.models import (
     Model,
     Field,
     ForeignKey,
