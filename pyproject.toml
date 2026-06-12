@@ -1,9 +1,20 @@
 [project]
 name = "bitorm"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.1.0"
+description = "A lightweight SQLite ORM with migrations, zero dependencies beyond the standard library."
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+bitorm = "bitorm.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bitorm"]

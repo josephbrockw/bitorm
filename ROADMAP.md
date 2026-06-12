@@ -2,11 +2,17 @@
 
 ## ~~Migrations~~ (Done)
 
-Implemented in `db.py`. See README for usage. Forward-only file-based migrations with auto-detection via `make_migration()` and `migrate()`. Migration files live in `{db_name}_migrations/`. Supports add/remove tables, add/remove columns, and column type/constraint changes via the 12-step table rebuild pattern.
+Implemented in `bitorm/db.py`. See README for usage. Forward-only file-based migrations with auto-detection via `make_migration()` and `migrate()`. Migration files live in `{db_name}_migrations/`. Supports add/remove tables, add/remove columns, and column type/constraint changes via the 12-step table rebuild pattern.
 
 **Not yet supported:**
 - Column renames (write a manual migration with `ALTER TABLE ... RENAME COLUMN`)
 - Index management
+
+## ~~CLI~~ (Done)
+
+Implemented in `bitorm/cli.py`, exposed as the `bitorm` console script. `bitorm init`
+scaffolds `[tool.bitorm]` config + a starter `models.py`; `bitorm makemigrations` and
+`bitorm migrate` wrap the migration functions. See README for usage.
 
 ## ~~Raw SQL Escape Hatch~~ (Done)
 

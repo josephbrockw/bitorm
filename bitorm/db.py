@@ -167,7 +167,7 @@ def _all_model_subclasses(base: type) -> list[type]:
 
 
 def _get_model_schema(models: Optional[list[type]] = None) -> dict[str, TableSchema]:
-    from bitorm import Model
+    from .models import Model
 
     if models is None:
         models = _all_model_subclasses(Model)
@@ -254,7 +254,7 @@ def _diff_schemas(
 # --------------------------------------------------------------------------- #
 
 def _qi(name: str) -> str:
-    from fields import _qi as fields_qi
+    from .fields import _qi as fields_qi
     return fields_qi(name)
 
 

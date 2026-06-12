@@ -1,15 +1,15 @@
 """
-microrm — a super lightweight ORM for SQLite, standard library only.
+bitorm — a super lightweight ORM for SQLite, standard library only.
 
 Design goals:
-    * Single file, zero third-party dependencies (sqlite3 + typing + datetime).
+    * Zero third-party dependencies (sqlite3 + typing + datetime).
     * Declare tables as classes using type annotations.
     * Safe by default: every value goes through a parameterized query.
     * Small, readable, hackable surface area.
 
 Quick start:
 
-    from microrm import Model, Field, connect
+    from bitorm import Model, Field, connect
     from datetime import datetime
 
     class User(Model):
@@ -36,8 +36,8 @@ import inspect
 import sqlite3
 from typing import Any, Iterator, Optional
 
-from db import Database, connect, _db, make_migration, migrate  # noqa: F401
-from fields import (  # noqa: F401
+from .db import Database, connect, _db, make_migration, migrate  # noqa: F401
+from .fields import (  # noqa: F401
     _UNSET, _qi, Field, FileField, FileRef, _FileDescriptor,
     _Column, ForeignKey, _ForwardFK, _ReverseFK,
     ManyToMany, _M2MManager, _M2MDescriptor,

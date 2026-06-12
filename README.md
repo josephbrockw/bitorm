@@ -8,13 +8,65 @@ Python 3.11+
 
 ## Installation
 
-Copy `bitorm.py` and `db.py` into your project. That's it — there's nothing to install.
-
-If you're using it as a package:
+Add BitORM to your project with [uv](https://docs.astral.sh/uv/):
 
 ```
-pip install -e .
+uv add git+https://github.com/josephbrockw/bitorm
 ```
+
+This installs the package and the `bitorm` CLI. (Plain pip works too:
+`pip install git+https://github.com/josephbrockw/bitorm`.)
+
+To hack on BitORM itself, clone it and sync:
+
+```
+git clone https://github.com/josephbrockw/bitorm
+cd bitorm
+uv sync
+```
+
+## Command-Line Interface
+
+BitORM ships a CLI for scaffolding and migrations. Run it through uv:
+
+```
+uv run bitorm init             # scaffold config + a starter models.py
+uv run bitorm makemigrations   # generate a migration from model changes
+uv run bitorm migrate          # apply pending migrations
+```
+
+### Setup
+
+`bitorm init` adds a `[tool.bitorm]` section to your `pyproject.toml` and creates a
+starter `models.py`:
+
+```toml
+[tool.bitorm]
+database = "app.db"   # path to your SQLite database file
+models = "models"     # importable module that defines your Model subclasses
+```
+
+Point `database` at wherever you want the DB file, and `models` at the module that
+declares your tables (a dotted path like `myapp.models` works too).
+
+### Workflow
+
+```
+# 1. Edit models.py to define your tables.
+# 2. Generate a migration (optionally name it):
+uv run bitorm makemigrations initial
+#    → Created app_migrations/001_initial.py
+# 3. Apply it:
+uv run bitorm migrate
+#    → Applied 001_initial
+```
+
+`makemigrations` diffs your models against the database and writes a migration file;
+`migrate` applies any that haven't run yet. Both are thin wrappers over the
+`make_migration()` / `migrate()` functions documented below, so you can mix CLI and
+programmatic use freely.
+
+You can also invoke the CLI as a module: `uv run python -m bitorm migrate`.
 
 ## Quick Start
 
@@ -136,6 +188,11 @@ User.drop_table()                      # DROP TABLE IF EXISTS ...
 ## Migrations
 
 `create_table()` works for new projects, but once your database has data you need migrations to evolve the schema without losing it.
+
+The easiest way to run migrations is the [CLI](#command-line-interface)
+(`uv run bitorm makemigrations` / `uv run bitorm migrate`). The functions below are
+what those commands call, and are useful when you want to drive migrations from your
+own code.
 
 ### Generating a Migration
 

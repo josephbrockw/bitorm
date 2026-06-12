@@ -5,9 +5,9 @@ import os
 
 import pytest
 
-from bitorm import Model, Field, FileField, FileRef, _FileDescriptor
-from db import connect
-import db as _db_module
+from bitorm.models import Model, Field, FileField, FileRef, _FileDescriptor
+from bitorm.db import connect
+import bitorm.db as _db_module
 
 
 # --------------------------------------------------------------------------- #
