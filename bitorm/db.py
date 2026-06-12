@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import importlib.util
 import os
 import re
@@ -21,22 +22,91 @@ class Database:
 
     def __init__(self, path: str = ":memory:"):
         self.path = path
-        self.conn = sqlite3.connect(path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
+        self._atomic_depth = 0
+        self._pid = os.getpid()
+        self.conn = self._open()
+
+    def _open(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        if self.path != ":memory:":
+            # WAL lets other processes read while one writes (e.g. a training
+            # loop logging metrics while a DataLoader worker reads samples).
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    def _check_fork(self) -> None:
+        # sqlite3 connections aren't fork-safe. If this object crossed a
+        # fork() (e.g. into a PyTorch DataLoader worker), reopen lazily so
+        # each process gets its own connection.
+        if os.getpid() != self._pid:
+            self._pid = os.getpid()
+            self._atomic_depth = 0
+            self.conn = self._open()
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        self._check_fork()
         return self.conn.execute(sql, params)
+
+    def executemany(self, sql: str, seq_of_params) -> sqlite3.Cursor:
+        self._check_fork()
+        return self.conn.executemany(sql, seq_of_params)
 
     def raw(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         """Execute raw SQL and return a list of sqlite3.Row objects."""
         return self.execute(sql, params).fetchall()
 
     def commit(self) -> None:
-        self.conn.commit()
+        if self._atomic_depth == 0:
+            self.conn.commit()
+
+    def atomic(self) -> "_Atomic":
+        """Context manager wrapping the block in a transaction.
+
+        Commits on success, rolls back on exception. Inside the block,
+        commit() is a no-op, so all ORM writes participate automatically.
+        Nested blocks use SAVEPOINTs.
+        """
+        return _Atomic(self)
 
     def close(self) -> None:
         self.conn.close()
+
+
+class _Atomic:
+    """Transaction context manager returned by Database.atomic()."""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def __enter__(self) -> Database:
+        self.db._check_fork()
+        depth = self.db._atomic_depth
+        if depth == 0:
+            if not self.db.conn.in_transaction:
+                self.db.conn.execute("BEGIN")
+        else:
+            self.db.conn.execute(f"SAVEPOINT bitorm_sp_{depth}")
+        self.db._atomic_depth = depth + 1
+        return self.db
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.db._atomic_depth -= 1
+        depth = self.db._atomic_depth
+        if depth == 0:
+            if exc_type is None:
+                self.db.conn.commit()
+            else:
+                self.db.conn.rollback()
+        else:
+            if exc_type is None:
+                self.db.conn.execute(f"RELEASE bitorm_sp_{depth}")
+            else:
+                self.db.conn.execute(f"ROLLBACK TO bitorm_sp_{depth}")
+                self.db.conn.execute(f"RELEASE bitorm_sp_{depth}")
+        return False
 
 
 _default_db: Optional[Database] = None
@@ -170,9 +240,18 @@ def _get_model_schema(models: Optional[list[type]] = None) -> dict[str, TableSch
     from .models import Model
 
     if models is None:
+        # Classes live in reference cycles, so dead Model subclasses (e.g.
+        # defined in a function that has returned) linger in __subclasses__
+        # until a GC pass. Collect first so enumeration is deterministic.
+        gc.collect()
         models = _all_model_subclasses(Model)
     schema: dict[str, TableSchema] = {}
     for cls in models:
+        if not cls._columns:
+            # A class whose __init_subclass__ raised (e.g. a conflicting M2M
+            # related_name) can linger in __subclasses__ until garbage
+            # collected, with no columns since processing never finished.
+            continue
         table_name = cls._table
         columns: dict[str, ColumnSchema] = {}
         for col in cls._columns:
@@ -469,12 +548,15 @@ def migrate(db: Database) -> list[str]:
             raise AttributeError(
                 f"Migration {name} has no forward() function."
             )
-        module.forward(db)
-        db.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
-            (name, datetime.now().isoformat()),
-        )
-        db.commit()
+        # Each migration is atomic: a failure mid-way (e.g. during the
+        # multi-statement table rebuild) rolls back rather than leaving
+        # the schema half-migrated.
+        with db.atomic():
+            module.forward(db)
+            db.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+                (name, datetime.now().isoformat()),
+            )
         newly_applied.append(name)
 
     return newly_applied

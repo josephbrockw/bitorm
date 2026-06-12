@@ -38,14 +38,14 @@ from typing import Any, Iterator, Optional
 
 from .db import Database, connect, _db, make_migration, migrate  # noqa: F401
 from .fields import (  # noqa: F401
-    _UNSET, _qi, Field, FileField, FileRef, _FileDescriptor,
+    _UNSET, _qi, Field, JSONField, FileField, FileRef, _FileDescriptor,
     _Column, ForeignKey, _ForwardFK, _ReverseFK,
     ManyToMany, _M2MManager, _M2MDescriptor,
 )
 
 __all__ = [
-    "Model", "Field", "FileField", "FileRef", "ForeignKey", "ManyToMany",
-    "connect", "Database", "make_migration", "migrate",
+    "Model", "Field", "JSONField", "FileField", "FileRef", "ForeignKey",
+    "ManyToMany", "connect", "Database", "make_migration", "migrate",
 ]
 
 
@@ -486,6 +486,27 @@ class Model:
         return obj
 
     # -- persistence --------------------------------------------------------
+    def _insert(self) -> None:
+        """INSERT this object (no UPDATE fallback). Populates a generated pk.
+
+        Does not validate or commit — callers handle both.
+        """
+        pk = self._pk
+        if getattr(self, pk, None) is None:
+            cols = [c for c in self._columns if c.name != pk]
+        else:  # pre-set primary key: include it in the INSERT
+            cols = self._columns
+        names = [c.name for c in cols]
+        values = [c.to_db(getattr(self, c.name)) for c in cols]
+        placeholders = ", ".join("?" for _ in names)
+        sql = (
+            f"INSERT INTO {_qi(self._table)} ({', '.join(_qi(n) for n in names)}) "
+            f"VALUES ({placeholders})"
+        )
+        cur = _db().execute(sql, tuple(values))
+        if getattr(self, pk, None) is None:
+            setattr(self, pk, cur.lastrowid)  # populate generated id
+
     def save(self) -> "Model":
         """INSERT if this object has no primary key value, else UPDATE."""
         pk = self._pk
@@ -496,15 +517,7 @@ class Model:
             col._validate(getattr(self, col.name))
 
         if pk_value is None:  # INSERT
-            names = [c.name for c in data_cols]
-            values = [c.to_db(getattr(self, c.name)) for c in data_cols]
-            placeholders = ", ".join("?" for _ in names)
-            sql = (
-                f"INSERT INTO {_qi(self._table)} ({', '.join(_qi(n) for n in names)}) "
-                f"VALUES ({placeholders})"
-            )
-            cur = _db().execute(sql, tuple(values))
-            setattr(self, pk, cur.lastrowid)  # populate generated id
+            self._insert()
         else:  # UPDATE
             assignments = ", ".join(f"{_qi(c.name)} = ?" for c in data_cols)
             values = [c.to_db(getattr(self, c.name)) for c in data_cols]
@@ -512,18 +525,28 @@ class Model:
             sql = f"UPDATE {_qi(self._table)} SET {assignments} WHERE {_qi(pk)} = ?"
             cur = _db().execute(sql, tuple(values))
             if cur.rowcount == 0:
-                all_cols = self._columns
-                names = [c.name for c in all_cols]
-                vals = [c.to_db(getattr(self, c.name)) for c in all_cols]
-                placeholders = ", ".join("?" for _ in names)
-                sql = (
-                    f"INSERT INTO {_qi(self._table)} ({', '.join(_qi(n) for n in names)}) "
-                    f"VALUES ({placeholders})"
-                )
-                _db().execute(sql, tuple(vals))
+                self._insert()
 
         _db().commit()
         return self
+
+    @classmethod
+    def bulk_create(cls, objs: list["Model"]) -> list["Model"]:
+        """INSERT many objects in a single transaction.
+
+        Orders of magnitude faster than calling save() in a loop, which
+        commits per row. All-or-nothing: if any insert fails, none are kept.
+        Generated primary keys are populated on each object.
+        """
+        for obj in objs:
+            for col in cls._columns:
+                col._validate(getattr(obj, col.name))
+        if not objs:
+            return []
+        with _db().atomic():
+            for obj in objs:
+                obj._insert()
+        return objs
 
     def delete(self) -> None:
         pk_value = getattr(self, self._pk, None)

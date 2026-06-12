@@ -2678,3 +2678,82 @@ class TestRawSQL:
         _create_simple_tables()
         rows = _db().raw("SELECT * FROM simpleuser WHERE id = ?", (999,))
         assert rows == []
+
+
+# =========================================================================== #
+# 27. bulk_create
+# =========================================================================== #
+
+class TestBulkCreate:
+
+    def test_inserts_all_and_populates_pks(self):
+        _create_simple_tables()
+        users = [
+            SimpleUser(name=f"u{i}", email=f"u{i}@test.com", age=i)
+            for i in range(5)
+        ]
+        result = SimpleUser.bulk_create(users)
+        assert result is users
+        assert SimpleUser.all().count() == 5
+        ids = [u.id for u in users]
+        assert all(i is not None for i in ids)
+        assert ids == sorted(ids)
+
+    def test_empty_list(self):
+        _create_simple_tables()
+        assert SimpleUser.bulk_create([]) == []
+        assert SimpleUser.all().count() == 0
+
+    def test_defaults_applied(self):
+        _create_simple_tables()
+        SimpleUser.bulk_create([SimpleUser(name="Ada", email="a@test.com")])
+        assert SimpleUser.get(name="Ada").age == 0  # class-level default
+
+    def test_validation_failure_inserts_nothing(self):
+        _create_simple_tables()
+        users = [
+            SimpleUser(name="Ada", email="a@test.com", age=1),
+            SimpleUser(name="Bob", email="b@test.com", age="old"),  # bad type
+        ]
+        with pytest.raises(TypeError, match="age"):
+            SimpleUser.bulk_create(users)
+        assert SimpleUser.all().count() == 0
+
+    def test_constraint_violation_rolls_back_batch(self):
+        _create_simple_tables()
+        users = [
+            SimpleUser(name="Ada", email="dup@test.com", age=1),
+            SimpleUser(name="Bob", email="dup@test.com", age=2),  # UNIQUE clash
+        ]
+        with pytest.raises(sqlite3.IntegrityError):
+            SimpleUser.bulk_create(users)
+        assert SimpleUser.all().count() == 0
+
+    def test_preset_pks_respected(self):
+        _create_simple_tables()
+        users = [
+            SimpleUser(name="Ada", email="a@test.com"),
+            SimpleUser(name="Bob", email="b@test.com"),
+        ]
+        users[0].id = 100
+        users[1].id = 200
+        SimpleUser.bulk_create(users)
+        assert SimpleUser.get(id=100).name == "Ada"
+        assert SimpleUser.get(id=200).name == "Bob"
+
+    def test_fk_columns(self):
+        _create_fk_tables()
+        author = FKAuthor(name="Ada", email="ada@test.com").save()
+        posts = [FKPost(title=f"p{i}", body="", author=author) for i in range(3)]
+        FKPost.bulk_create(posts)
+        assert author.fkposts.count() == 3
+
+    def test_nested_in_outer_atomic_rolls_back(self):
+        _create_simple_tables()
+        with pytest.raises(RuntimeError):
+            with _db().atomic():
+                SimpleUser.bulk_create(
+                    [SimpleUser(name="Ada", email="a@test.com")]
+                )
+                raise RuntimeError("boom")
+        assert SimpleUser.all().count() == 0

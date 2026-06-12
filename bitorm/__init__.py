@@ -10,6 +10,7 @@ from importlib.metadata import PackageNotFoundError, version
 from .models import (  # noqa: F401
     Model,
     Field,
+    JSONField,
     FileField,
     FileRef,
     ForeignKey,
@@ -29,6 +30,7 @@ except PackageNotFoundError:  # running from a bare source tree, not installed
 __all__ = [
     "Model",
     "Field",
+    "JSONField",
     "FileField",
     "FileRef",
     "ForeignKey",

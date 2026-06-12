@@ -45,6 +45,25 @@ class Field:
         self.default_factory = default_factory
 
 
+class JSONField(Field):
+    """Store any JSON-serializable value (dict, list, ...) as TEXT.
+
+    Serialized with json.dumps on save, parsed back with json.loads on read.
+    Use default_factory=dict (not default={}) to avoid a shared mutable default.
+    """
+
+    def __init__(
+        self,
+        *,
+        nullable: bool = True,
+        default: Any = _UNSET,
+        default_factory: Optional[Any] = None,
+    ):
+        super().__init__(
+            nullable=nullable, default=default, default_factory=default_factory
+        )
+
+
 class FileField:
     """Reference a file on disk. Stores a relative path as TEXT in the DB."""
 
@@ -188,6 +207,13 @@ class _Column:
     def to_db(self, value: Any) -> Any:
         if value is None:
             return None
+        if isinstance(self.field, JSONField):
+            try:
+                return json.dumps(value)
+            except TypeError as exc:
+                raise TypeError(
+                    f"Field '{self.name}' is not JSON serializable: {exc}"
+                ) from exc
         if isinstance(value, FileRef):
             return value.relative
         if self.py_type in (datetime, date):
@@ -199,6 +225,8 @@ class _Column:
     def from_db(self, value: Any) -> Any:
         if value is None:
             return None
+        if isinstance(self.field, JSONField):
+            return json.loads(value)
         if self.py_type is datetime:
             return datetime.fromisoformat(value)
         if self.py_type is date:
@@ -214,6 +242,9 @@ class _Column:
                     f"Field '{self.name}' cannot be None (not nullable)."
                 )
             return
+
+        if isinstance(self.field, JSONField):
+            return  # serializability is enforced in to_db
 
         if isinstance(value, FileRef):
             return
@@ -353,7 +384,7 @@ class _M2MManager:
             if getattr(o, o._pk) is None:
                 raise ValueError("All objects must be saved before adding to a many-to-many relation.")
         rows = [(self.this_pk_value, getattr(o, o._pk)) for o in objs]
-        _db().conn.executemany(
+        _db().executemany(
             f"INSERT OR IGNORE INTO {_qi(self.join_table)} "
             f"({_qi(self.this_col)}, {_qi(self.other_col)}) VALUES (?, ?)",
             rows,
@@ -363,7 +394,7 @@ class _M2MManager:
     def remove(self, *objs) -> None:
         self._require_saved()
         rows = [(self.this_pk_value, getattr(o, o._pk)) for o in objs]
-        _db().conn.executemany(
+        _db().executemany(
             f"DELETE FROM {_qi(self.join_table)} "
             f"WHERE {_qi(self.this_col)} = ? AND {_qi(self.other_col)} = ?",
             rows,

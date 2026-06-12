@@ -1,6 +1,6 @@
 [project]
 name = "bitorm"
-version = "1.2.0"
+version = "1.3.0"
 description = "A lightweight SQLite ORM with migrations, zero dependencies beyond the standard library."
 readme = "README.md"
 requires-python = ">=3.11"
